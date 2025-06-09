@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.nox/
+.tox/
+.coverage
+.coverage.*
+.hypothesis/
+htmlcov/
+*.egg-info/
+.eggs/
+dist/
+build/
+*.so
+*.DS_Store
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+venv*/
+pip-wheel-metadata/
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# IDE specific
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
