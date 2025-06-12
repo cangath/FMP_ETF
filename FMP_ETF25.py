@@ -5,198 +5,260 @@ import datetime as dt
 import time
 
 # --- 1. PAGE CONFIGURATION ---
-st.set_page_config(page_title="ETF Builder (FMP)", layout="wide")
-st.title("📈 ETF Builder (using Financial Modeling Prep)")
-st.caption("Create a custom Price-Weighted ETF using FMP End-of-Day stock prices. Caching is used.")
+st.set_page_config(page_title="Custom ETF Analyzer (FMP)", layout="wide", initial_sidebar_state="expanded")
+st.title("📈 Custom ETF Analyzer")
+st.caption("Using Financial Modeling Prep End-of-Day Price Data")
 
-# --- 2. FMP API Key Handling (using st.secrets) ---
+# --- 2. YOUR INTRODUCTORY PARAGRAPH ---
+# Replace the content of this st.markdown block with your desired paragraph.
+# You can use Markdown formatting (like **bold**, *italics*, links [text](URL), etc.)
+st.markdown("""
+Welcome to the Custom ETF Analyzer! This tool demonstrates the construction and performance
+tracking of a price-weighted ETF. It was inspired by practical exercises and portfolio analysis
+from work with **Fresno State's Student Managed Investment Fund**. The primary goal is to visualize
+how a custom basket of stocks would perform as an ETF and to explore the impact of constituent
+selection and weighting methodologies. Here, we focus on a price-weighted approach and compare
+its performance against standard market benchmarks.
+""")
+st.markdown("---")
+
+# --- 3. FMP API Key Handling ---
 FMP_API_KEY = None
 try:
-    FMP_API_KEY = st.secrets["FMP_API_KEY"]
-except (FileNotFoundError, KeyError):
-    st.sidebar.error("`FMP_API_KEY` not found in Streamlit secrets (.streamlit/secrets.toml).")
-    # For local development, you could add a temporary fallback input here
-    # temp_key = st.sidebar.text_input("TEMPORARY: Enter FMP Key for local dev", type="password", key="temp_fmp_key")
-    # if temp_key: FMP_API_KEY = temp_key
+    FMP_API_KEY = st.secrets.get("FMP_API_KEY") # Use .get for graceful handling if not found
+except (FileNotFoundError, KeyError): # FileNotFoundError for local, KeyError if key missing in deployed secrets
+    # This error is mainly for local dev if secrets.toml is missing.
+    # On cloud, if secret isn't set, FMP_API_KEY will be None.
+    pass 
 
 if not FMP_API_KEY:
-    st.error("CRITICAL: FMP API Key is not configured. Please set it in `.streamlit/secrets.toml` for this app to function.")
+    st.sidebar.error("`FMP_API_KEY` not found in Streamlit secrets. Please configure it for the app to fetch data.")
+    st.error("CRITICAL: FMP API Key is not configured. Data fetching will fail. Please set it in Streamlit Cloud app settings under 'Secrets'.")
     st.stop()
 
-# --- 3. CACHED DATA FETCHING FUNCTION (FMP - Time Series) ---
+# --- 4. DEFAULT TICKERS & BENCHMARK ETFs ---
+# Magnificent 7 as default for custom ETF
+MAG7_TICKERS_DEFAULT = ["AAPL", "MSFT", "GOOG", "AMZN", "NVDA", "META", "TSLA"]
+DEFAULT_CUSTOM_TICKERS_STRING = ",".join(MAG7_TICKERS_DEFAULT)
+
+BENCHMARK_ETFS = {
+    "VOO": "S&P 500 (VOO)",
+    "DIA": "Dow Jones Ind. Avg. (DIA)",
+    "QQQ": "Nasdaq 100 (QQQ)"
+}
+
+# --- 5. CACHED DATA FETCHING FUNCTION (FMP - Time Series) ---
 @st.cache_data(ttl="4h") # Cache EOD prices for 4 hours
 def fetch_fmp_daily_prices(tickers_tuple, api_key_param, start_date_str, end_date_str):
-    st.sidebar.info(f"♻️ Fetching EOD prices from FMP for: {', '.join(tickers_tuple)} ({start_date_str} to {end_date_str})...")
-    
+    # This function will be called with all tickers to fetch (custom + benchmarks)
+    if not api_key_param: # Should be caught earlier, but as a safeguard
+        return {}, [], [("API_KEY_MISSING", "API Key missing in fetch function")]
+
+    st.sidebar.info(f"♻️ Fetching EOD prices from FMP for: {', '.join(tickers_tuple)}...")
     _all_stock_close_prices = {}
     _successful_tickers = []
     _problematic_items = []
-    
-    # FMP API base URL for historical daily prices
     base_url = "https://financialmodelingprep.com/api/v3/historical-price-full/"
 
     for i, ticker in enumerate(tickers_tuple):
-        # FMP rate limits depend on your plan. Free tier might be ~250 requests/day.
-        # Paid plans have much higher limits. Let's add a small, respectful delay.
-        if i > 0:
-            st.sidebar.write(f"Pausing ~0.5s for FMP before {ticker}...")
-            time.sleep(0.5) 
+        # Respect FMP rate limits - a small delay can help for many tickers
+        if i > 0: time.sleep(0.25) # 250ms delay
         
         try:
-            st.sidebar.caption(f"Fetching FMP EOD for {ticker}...")
-            # Construct the full URL with date range
             url = f"{base_url}{ticker}?from={start_date_str}&to={end_date_str}&apikey={api_key_param}"
-            response = requests.get(url, timeout=15) # Added timeout
-            response.raise_for_status() # Raises an HTTPError if the HTTP request returned an unsuccessful status code
-            
+            response = requests.get(url, timeout=20) # Increased timeout
+            response.raise_for_status() # Raises HTTPError for bad responses (4XX or 5XX)
             data = response.json()
 
             if "historical" in data and data["historical"]:
-                # Convert list of dicts to DataFrame
                 price_df = pd.DataFrame(data["historical"])
                 price_df['date'] = pd.to_datetime(price_df['date'])
                 price_df = price_df.set_index('date').sort_index(ascending=True)
-                
                 if 'close' in price_df.columns:
                     _all_stock_close_prices[ticker] = price_df['close'].astype(float)
                     _successful_tickers.append(ticker)
-                    st.sidebar.write(f"✅ FMP: Fetched EOD for {ticker}")
-                else:
-                    _problematic_items.append((ticker, "FMP EOD: 'close' column not found in historical data."))
-            elif "Error Message" in data:
-                 _problematic_items.append((ticker, f"FMP API Error: {data['Error Message']}"))
-                 st.sidebar.warning(f"FMP API Error for {ticker}: {data['Error Message']}")
-            else:
-                _problematic_items.append((ticker, f"FMP EOD: No 'historical' data found for {ticker}. Response: {str(data)[:100]}"))
-        
+                else: _problematic_items.append((ticker, "FMP EOD: 'close' column not found."))
+            elif "Error Message" in data: # FMP often returns errors in JSON with this key
+                _problematic_items.append((ticker, f"FMP API Error: {data['Error Message']}"))
+            else: # Other unexpected response
+                _problematic_items.append((ticker, f"FMP EOD: No 'historical' data found or unexpected format for {ticker}."))
         except requests.exceptions.HTTPError as http_err:
-            err_msg = f"FMP HTTP Error for {ticker}: {http_err} - Response: {response.text[:200]}"
-            _problematic_items.append((ticker, err_msg))
-            st.sidebar.warning(err_msg)
-        except requests.exceptions.RequestException as req_err: # Catch other requests errors (timeout, connection)
-            err_msg = f"FMP Request Error for {ticker}: {req_err}"
-            _problematic_items.append((ticker, err_msg))
-            st.sidebar.warning(err_msg)
-        except Exception as e:
-            err_msg = f"FMP General Error for {ticker}: {str(e)[:200]}"
-            _problematic_items.append((ticker, err_msg))
-            st.sidebar.warning(err_msg)
+            _problematic_items.append((ticker, f"FMP HTTP Error for {ticker}: {http_err} (Status: {response.status_code if 'response' in locals() else 'N/A'})"))
+        except requests.exceptions.RequestException as req_err: # Other network errors
+            _problematic_items.append((ticker, f"FMP Request Error for {ticker}: {req_err}"))
+        except Exception as e: # Catch-all for other errors (e.g., JSON parsing)
+            _problematic_items.append((ticker, f"FMP General Error for {ticker}: {e}"))
             
     return _all_stock_close_prices, _successful_tickers, _problematic_items
 
-# --- 4. SIDEBAR FOR USER INPUTS ---
-st.sidebar.header("🛠️ ETF Configuration (FMP)")
-
-raw_tickers_input = st.sidebar.text_input(
-    "Stock Tickers (comma-separated)",
-    "AAPL,MSFT,GOOG,NVDA" # FMP generally has good US coverage
+# --- 6. SIDEBAR FOR USER INPUTS ---
+st.sidebar.header("🛠️ ETF Configuration")
+raw_tickers_input = st.sidebar.text_area(
+    "Custom ETF Stock Tickers (comma-separated)",
+    DEFAULT_CUSTOM_TICKERS_STRING, # Default to Mag7
+    height=100 # Adjusted height
 )
 
-# FMP takes date ranges directly, so output_size selector is not needed like for Alpha Vantage 'compact'/'full'
 default_start_date = dt.date.today() - dt.timedelta(days=365 * 5) # Default to 5 years
 default_end_date = dt.date.today() - dt.timedelta(days=1) # Yesterday
-
 start_date_input = st.sidebar.date_input("Start Date", default_start_date)
 end_date_input = st.sidebar.date_input("End Date", default_end_date)
 
+selected_benchmarks_for_overlay = st.sidebar.multiselect(
+    "Compare Custom ETF With (on main performance chart):",
+    options=list(BENCHMARK_ETFS.keys()),
+    default=["VOO", "QQQ"], # Default benchmarks
+    format_func=lambda x: BENCHMARK_ETFS[x]
+)
+
 st.sidebar.write("---")
-if st.sidebar.button("Clear FMP Price Data Cache & Rerun"):
+if st.sidebar.button("Clear Price Data Cache & Rerun"):
     st.cache_data.clear()
-    st.sidebar.success("FMP Price data cache cleared! Rerunning...")
+    st.sidebar.success("Price data cache cleared! Rerunning...")
     st.rerun()
 
-# --- 5. MAIN APP LOGIC ---
-if not raw_tickers_input: st.warning("Please enter stock tickers."); st.stop()
-cleaned_tickers = sorted(list(set(t.strip().upper() for t in raw_tickers_input.split(',') if t.strip())))
-if not cleaned_tickers: st.warning("No valid stock tickers processed."); st.stop()
+# --- 7. MAIN APP LOGIC ---
+# Parse user's custom tickers
+user_tickers_list = sorted(list(set(t.strip().upper() for t in raw_tickers_input.split(',') if t.strip())))
 
-if start_date_input >= end_date_input: 
-    st.error("Start date must be before end date.")
-    st.stop()
-if (end_date_input - start_date_input).days > 365 * 10: # Arbitrary limit to prevent extremely long FMP calls
-    st.warning("Date range too long (max ~10 years recommended for performance). Please shorten.")
+if not user_tickers_list:
+    st.warning("Please enter at least one stock ticker for your custom ETF.")
     st.stop()
 
+if start_date_input >= end_date_input:
+    st.error("Error: Start date must be before end date.")
+    st.stop()
+if (end_date_input - start_date_input).days > 365 * 7: # Limit to 7 years for FMP calls for performance
+    st.sidebar.warning("Note: Selected date range is over 7 years. Data fetching might be slow.")
 
-tickers_tuple_for_cache = tuple(cleaned_tickers)
-start_date_str = start_date_input.strftime('%Y-%m-%d')
-end_date_str = end_date_input.strftime('%Y-%m-%d')
+# Combine custom tickers and selected benchmark tickers for a single fetch operation
+tickers_to_fetch_list = sorted(list(set(user_tickers_list + selected_benchmarks_for_overlay)))
+tickers_tuple_for_cache = tuple(tickers_to_fetch_list)
+price_start_date_str = start_date_input.strftime('%Y-%m-%d')
+price_end_date_str = end_date_input.strftime('%Y-%m-%d')
 
+# --- Fetch ALL Price Data ---
+all_fetched_prices, successful_all_fetches, problematic_all_fetches = {}, [], []
+if tickers_tuple_for_cache: # Only proceed if there are tickers to fetch
+    with st.spinner(f"Fetching FMP EOD prices for {len(tickers_to_fetch_list)} symbols... This may take a moment."):
+        all_fetched_prices, successful_all_fetches, problematic_all_fetches = fetch_fmp_daily_prices(
+            tickers_tuple_for_cache, FMP_API_KEY, price_start_date_str, price_end_date_str
+        )
 
-# --- Fetch Price Data ---
-st.write("---")
-with st.spinner(f"Fetching FMP EOD prices for {', '.join(cleaned_tickers)}..."):
-    all_stock_close_prices, successful_price_tickers, problematic_price_items = fetch_fmp_daily_prices(
-        tickers_tuple_for_cache, FMP_API_KEY, start_date_str, end_date_str
-    )
-
-# --- Display Price Fetching Issues ---
-if problematic_price_items:
-    st.sidebar.write("---")
-    st.sidebar.subheader("⚠️ FMP EOD Price Fetching Issues:")
-    for ticker, error_msg in problematic_price_items:
+# Display any fetching issues
+if problematic_all_fetches:
+    st.sidebar.write("---"); st.sidebar.subheader("⚠️ FMP Price Fetching Issues:")
+    for ticker, error_msg in problematic_all_fetches:
         st.sidebar.warning(f"**{ticker}:** {error_msg}")
 
-if not successful_price_tickers:
-    st.error("FMP: Failed to fetch EOD prices for ANY tickers. Cannot build ETF."); st.stop()
-if not all_stock_close_prices:
-    st.error("FMP: No EOD stock price data was returned. Cannot build ETF."); st.stop()
+# --- Prepare Data for Custom ETF ---
+custom_etf_prices = {t: all_fetched_prices[t] for t in user_tickers_list if t in successful_all_fetches and all_fetched_prices.get(t) is not None and not all_fetched_prices[t].empty}
+successful_custom_tickers = [t for t in user_tickers_list if t in custom_etf_prices] # Tickers that are part of user list AND successfully fetched
 
-# --- Create Price DataFrame ---
-prices_for_df = {tick: data for tick, data in all_stock_close_prices.items() if tick in successful_price_tickers and data is not None and not data.empty}
-if not prices_for_df: st.warning("FMP: No price data available for ETF construction."); st.stop()
+if not successful_custom_tickers:
+    st.error("Failed to fetch prices for ANY of your custom ETF tickers. Cannot build or display custom ETF."); st.stop()
 
-etf_df = pd.DataFrame(prices_for_df)
-# FMP data is already indexed by date correctly if parsed as above
-# etf_df.index = pd.to_datetime(etf_df.index) # Already done in fetch if data["historical"] was processed
-etf_df.dropna(how='all', inplace=True)
+custom_etf_df = pd.DataFrame(custom_etf_prices)
+custom_etf_df.dropna(how='all', inplace=True) # Drop days where all custom tickers had no data
 
-if etf_df.empty: 
-    st.warning(f"FMP: No price data available for the selected period after processing: {start_date_str} to {end_date_str}.")
-    st.stop()
+if custom_etf_df.empty:
+    st.warning(f"No price data available for your custom ETF components within the period: {price_start_date_str} to {price_end_date_str}."); st.stop()
 
-# --- ETF Calculation (Price-Weighted) ---
-st.subheader(f"📈 Price-Weighted ETF Performance (FMP Data)")
-valid_tickers_for_etf = [tick for tick in successful_price_tickers if tick in etf_df.columns and not etf_df[tick].isnull().all()]
+# Final list of custom tickers that have data in the combined DataFrame
+valid_custom_tickers_for_pw = [t for t in successful_custom_tickers if t in custom_etf_df.columns and not custom_etf_df[t].isnull().all()]
+if not valid_custom_tickers_for_pw:
+    st.error("No valid custom tickers with data remaining after processing for the selected period."); st.stop()
 
-if not valid_tickers_for_etf:
-    st.error("FMP: No valid tickers with data remaining for ETF calculation."); st.stop()
+# Calculate Price-Weighted Custom ETF
+custom_etf_df['Portfolio Sum'] = custom_etf_df[valid_custom_tickers_for_pw].sum(axis=1)
+custom_etf_df['My Custom ETF'] = custom_etf_df['Portfolio Sum'] / len(valid_custom_tickers_for_pw)
 
-st.info(f"Building Price-Weighted ETF with FMP data for: {', '.join(valid_tickers_for_etf)}")
+# --- SECTION 1: Custom ETF Performance (with optional Benchmark Overlay) ---
+st.header(f"⚖️ Your Custom Price-Weighted ETF Performance")
+st.caption(f"Constituents: {', '.join(valid_custom_tickers_for_pw)}")
 
-etf_df['Portfolio Sum'] = etf_df[valid_tickers_for_etf].sum(axis=1)
-etf_df['ETF Price'] = etf_df['Portfolio Sum'] / len(valid_tickers_for_etf)
-
-# --- Display ETF Chart and Data ---
-if 'ETF Price' in etf_df.columns and not etf_df['ETF Price'].empty and not etf_df['ETF Price'].isnull().all():
-    st.line_chart(etf_df['ETF Price'])
-
-    st.subheader("📊 Individual Stock Prices (Normalized - FMP Data)")
-    df_for_normalization = etf_df[valid_tickers_for_etf].copy().dropna(how='all')
-    if not df_for_normalization.empty:
-        normalized_values = pd.DataFrame(index=df_for_normalization.index)
-        if not df_for_normalization.empty: # Check again after potential dropna
-            first_valid_overall_idx = df_for_normalization.bfill().index[0] 
-            for col in df_for_normalization.columns:
-                col_bfilled_from_start = df_for_normalization[col].bfill()
-                if not col_bfilled_from_start.loc[first_valid_overall_idx:].empty and not pd.isna(col_bfilled_from_start.loc[first_valid_overall_idx:].iloc[0]):
-                    first_val = col_bfilled_from_start.loc[first_valid_overall_idx:].iloc[0]
-                    normalized_values[col] = (df_for_normalization[col] / first_val) * 100
-                else:
-                    normalized_values[col] = pd.NA
-            
-            if not normalized_values.empty:
-                 st.line_chart(normalized_values.dropna(axis=1, how='all'))
-            else:
-                 st.caption("FMP: Could not normalize individual stock prices.")
-        else:
-            st.caption("FMP: Not enough data for normalized individual stock prices.")
-
-    st.subheader("📋 ETF Data Snippet (Last 5 entries - FMP Data)")
-    display_cols = valid_tickers_for_etf + ['ETF Price']
-    st.dataframe(etf_df[display_cols].tail())
+chart_data_main_etf = pd.DataFrame()
+if 'My Custom ETF' in custom_etf_df.columns and not custom_etf_df['My Custom ETF'].isnull().all():
+    chart_data_main_etf['My Custom ETF'] = custom_etf_df['My Custom ETF']
 else:
-    st.warning("FMP: ETF Price could not be calculated or is empty.")
+    st.warning("Custom ETF price could not be calculated (e.g., all constituent data was NaN for the period).")
 
-st.write("---")
-st.info("Disclaimer: Educational tool. Data from Financial Modeling Prep (API usage subject to FMP terms and plan limits).")
+# Add selected benchmarks to this chart
+for bench_ticker in selected_benchmarks_for_overlay:
+    if bench_ticker in successful_all_fetches and all_fetched_prices.get(bench_ticker) is not None and not all_fetched_prices[bench_ticker].empty:
+        # Ensure benchmark data is aligned with custom ETF's index if combining
+        benchmark_series = all_fetched_prices[bench_ticker]
+        # chart_data_main_etf[f"{bench_ticker} ({BENCHMARK_ETFS[bench_ticker]})"] = benchmark_series # Direct add
+        # For cleaner plot if date ranges differ slightly after API fetch for some symbols:
+        aligned_benchmark, _ = benchmark_series.align(chart_data_main_etf['My Custom ETF'], join='right', copy=False) # Align to custom ETF's index
+        chart_data_main_etf[f"{bench_ticker} ({BENCHMARK_ETFS[bench_ticker]})"] = aligned_benchmark
+
+    else:
+        st.sidebar.warning(f"Data for benchmark {bench_ticker} was not successfully fetched or is empty; cannot overlay.")
+
+if not chart_data_main_etf.empty:
+    st.line_chart(chart_data_main_etf.dropna(how='all')) # Drop rows if all plotted lines are NaN
+
+    st.subheader("Custom ETF Data Snippet (Price-Weighted)")
+    display_cols_custom_etf = valid_custom_tickers_for_pw + ['My Custom ETF']
+    st.dataframe(custom_etf_df[display_cols_custom_etf].tail())
+else:
+    st.warning("Not enough data to display the main ETF performance chart.")
+
+st.markdown("---")
+
+# --- SECTION 2: Normalized Performance of Constituents & Selected Benchmarks ---
+st.header("📊 Normalized Performance Comparison (How $100 Would Grow)")
+st.caption("Shows the percentage growth of each custom ETF constituent, your custom ETF, and selected benchmarks from the start date.")
+
+data_to_normalize_list = []
+
+# Add Custom ETF Constituents
+for ticker in valid_custom_tickers_for_pw: # Use tickers that are valid for the ETF
+    if ticker in custom_etf_df.columns and not custom_etf_df[ticker].empty:
+        constituent_series = custom_etf_df[ticker].copy()
+        constituent_series.name = ticker 
+        data_to_normalize_list.append(constituent_series)
+
+# Add Custom ETF itself to normalized chart
+if 'My Custom ETF' in chart_data_main_etf.columns and not chart_data_main_etf['My Custom ETF'].empty and not chart_data_main_etf['My Custom ETF'].isnull().all():
+    custom_etf_norm_series = chart_data_main_etf['My Custom ETF'].copy() # Use from potentially aligned chart_data_main_etf
+    data_to_normalize_list.append(custom_etf_norm_series)
+
+# Add selected Index ETFs (benchmarks) for normalization
+for bench_ticker in selected_benchmarks_for_overlay:
+    benchmark_col_name = f"{bench_ticker} ({BENCHMARK_ETFS[bench_ticker]})"
+    if benchmark_col_name in chart_data_main_etf.columns and not chart_data_main_etf[benchmark_col_name].empty and not chart_data_main_etf[benchmark_col_name].isnull().all():
+        idx_series = chart_data_main_etf[benchmark_col_name].copy() # Use from potentially aligned chart_data_main_etf
+        # idx_series.name = benchmark_col_name # Name is already set
+        data_to_normalize_list.append(idx_series)
+
+if not data_to_normalize_list:
+    st.warning("No data available for normalized performance chart.")
+else:
+    comparison_df_norm = pd.concat(data_to_normalize_list, axis=1)
+    comparison_df_norm.dropna(how='all', inplace=True) # Drop rows where all values are NaN
+
+    if comparison_df_norm.empty:
+        st.warning("Not enough overlapping data for normalized comparison chart.")
+    else:
+        normalized_df = pd.DataFrame(index=comparison_df_norm.index)
+        for col in comparison_df_norm.columns:
+            series_to_norm = comparison_df_norm[col].copy()
+            # Find first non-NaN value to use as the base by backfilling then taking first valid index
+            # This ensures that even if a series starts with NaNs, we find its true first data point.
+            bfilled_series = series_to_norm.bfill()
+            if not bfilled_series.empty and not bfilled_series.isnull().all():
+                first_valid_value = bfilled_series.iloc[0]
+                if pd.notna(first_valid_value) and first_valid_value != 0:
+                    normalized_df[col] = (series_to_norm / first_valid_value) * 100
+                else:
+                    normalized_df[col] = pd.NA 
+            else:
+                 normalized_df[col] = pd.NA
+
+
+        st.line_chart(normalized_df.dropna(how='all', axis=1)) # Drop columns that are entirely NA after normalization attempt
+
+st.markdown("---")
+st.info("Disclaimer: Educational tool. Data from Financial Modeling Prep. API usage subject to FMP terms and plan limits.")
