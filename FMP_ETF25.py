@@ -6,19 +6,20 @@ import time
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="Custom ETF Analyzer (FMP)", layout="wide", initial_sidebar_state="expanded")
-st.title("📈 Custom ETF Analyzer")
+st.title("📈 Custom ETF Builder")
 st.caption("Using Financial Modeling Prep End-of-Day Price Data")
 
 # --- 2. YOUR INTRODUCTORY PARAGRAPH ---
 # Replace the content of this st.markdown block with your desired paragraph.
 # You can use Markdown formatting (like **bold**, *italics*, links [text](URL), etc.)
 st.markdown("""
-Welcome to the Custom ETF Analyzer! This tool demonstrates the construction and performance
+Welcome to the Custom ETF Builder! This tool demonstrates the construction and performance
 tracking of a price-weighted ETF. It was inspired by practical exercises and portfolio analysis
 from work with **Fresno State's Student Managed Investment Fund**. The primary goal is to visualize
 how a custom basket of stocks would perform as an ETF and to explore the impact of constituent
 selection and weighting methodologies. Here, we focus on a price-weighted approach and compare
-its performance against standard market benchmarks.
+its performance against standard market benchmarks. Created by Russell Adjei.
+Russelladjei@gmail.com
 """)
 st.markdown("---")
 
