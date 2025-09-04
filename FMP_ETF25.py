@@ -102,7 +102,7 @@ raw_tickers_input = st.sidebar.text_area(
     height=100 # Adjusted height
 )
 
-default_start_date = dt.date.today() - dt.timedelta(days=365 * 5) # Default to 5 years
+default_start_date = dt.date.today() - dt.timedelta(days=365 * 2) # Default to 5 years
 default_end_date = dt.date.today() - dt.timedelta(days=1) # Yesterday
 start_date_input = st.sidebar.date_input("Start Date", default_start_date)
 end_date_input = st.sidebar.date_input("End Date", default_end_date)
