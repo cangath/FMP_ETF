@@ -39,7 +39,9 @@ if not FMP_API_KEY:
 
 # --- 4. DEFAULT TICKERS & BENCHMARK ETFs ---
 # Magnificent 7 as default for custom ETF
-MAG7_TICKERS_DEFAULT = ["AAPL", "MSFT", "GOOG", "AMZN", "NVDA", "META", "TSLA"]
+#MAG7_TICKERS_DEFAULT = ["AAPL", "MSFT", "GOOG", "AMZN", "NVDA", "META", "TSLA"]
+#Using hotel stocks as NVDIA has ruined math.
+AG7_TICKERS_DEFAULT = ["MAR", "HLT", "IHG", "H", "CHH", "ABNB", "EXPE"]
 DEFAULT_CUSTOM_TICKERS_STRING = ",".join(MAG7_TICKERS_DEFAULT)
 
 BENCHMARK_ETFS = {
